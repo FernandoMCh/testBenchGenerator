@@ -4,7 +4,7 @@ import streamlit as st
 
 from vhdl_tb_generator.generator import generate_testbench
 from vhdl_tb_generator.parser import VhdlParseError, parse_entity
-from vhdl_tb_generator.type_check import coerce_value, parse_type
+from vhdl_tb_generator.type_check import coerce_value, fallback_value_for, parse_type
 from vhdl_tb_generator.utils import substitute_generics
 from vhdl_tb_generator.waveform import build_waveform_df, plot_waveform, resize_waveform_df
 
@@ -147,6 +147,7 @@ if dut:
     #    widths, type checking, the waveform — depends on these).
     # -----------------------------------------------------------------
     generic_values = {}
+    invalid_generics = []
     if dut["generics"]:
         st.header("2. Generic values")
         st.caption(
@@ -160,14 +161,30 @@ if dut:
                 value=g.default or "",
                 key=f"generic_{g.name}",
             )
-            result = coerce_value(raw, parse_type(g.type))
+            type_info = parse_type(g.type)
+            result = coerce_value(raw, type_info)
             if not result.ok:
-                st.error(f"**{g.name}**: {result.message}")
-                generic_values[g.name] = raw
+                default_result = coerce_value(g.default, type_info) if g.default else None
+                fallback_value = (
+                    default_result.value
+                    if default_result and default_result.ok
+                    else fallback_value_for(type_info)
+                )
+                st.error(
+                    f"⚠️ **{g.name}**: {result.message} Using `{fallback_value}` instead."
+                )
+                invalid_generics.append(g.name)
+                generic_values[g.name] = fallback_value
             else:
                 if result.converted:
                     st.caption(f"Will be used: `{result.value}`")
                 generic_values[g.name] = result.value
+
+        if invalid_generics:
+            st.warning(
+                "Invalid value(s) were replaced with a safe default so the testbench can "
+                "still be generated: " + ", ".join(f"**{name}**" for name in invalid_generics)
+            )
 
     # -----------------------------------------------------------------
     # 3. Clock signal
@@ -291,6 +308,11 @@ if dut:
     # 5. Generate and download
     # -----------------------------------------------------------------
     st.header("5. Generate testbench")
+    if invalid_generics:
+        st.caption(
+            "Note: a safe default was substituted for " + ", ".join(invalid_generics) +
+            " (see step 2) — edit it there if you need a different value."
+        )
     if st.button("Generate VHDL testbench", type="primary"):
         tb_source = generate_testbench(
             entity_name=dut["name"],

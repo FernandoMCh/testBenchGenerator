@@ -200,18 +200,21 @@ def coerce_value(raw_value: str, type_info: TypeInfo) -> CoercionResult:
         )
 
     if kind in _INTEGER_KINDS:
-        if _PLAIN_INT_RE.match(value):
-            ivalue = int(value)
-            if kind == "natural" and ivalue < 0:
-                return CoercionResult(ok=False, value=raw_value, message="natural does not accept negative values.")
-            if kind == "positive" and ivalue < 1:
-                return CoercionResult(ok=False, value=raw_value, message="positive requires values >= 1.")
-            return CoercionResult(ok=True, value=value)
-        if _looks_like_expression(value):
-            return CoercionResult(ok=True, value=value)
-        return CoercionResult(
-            ok=False, value=raw_value, message=f"'{value}' is not a valid integer or expression for '{type_info.raw}'."
-        )
+        ivalue = int(value) if _PLAIN_INT_RE.match(value) else _eval_int_expr(value)
+        if ivalue is None:
+            return CoercionResult(
+                ok=False,
+                value=raw_value,
+                message=(
+                    f"'{value}' is not a valid integer for '{type_info.raw}' "
+                    "(only numeric literals or arithmetic expressions like \"4+4\" are accepted)."
+                ),
+            )
+        if kind == "natural" and ivalue < 0:
+            return CoercionResult(ok=False, value=raw_value, message="natural does not accept negative values.")
+        if kind == "positive" and ivalue < 1:
+            return CoercionResult(ok=False, value=raw_value, message="positive requires values >= 1.")
+        return CoercionResult(ok=True, value=value)
 
     if kind == "boolean":
         if value.lower() in ("true", "false"):
@@ -234,3 +237,24 @@ def coerce_value(raw_value: str, type_info: TypeInfo) -> CoercionResult:
 
     # Unknown/custom type (record, enumerated type, ...): cannot validate meaningfully.
     return CoercionResult(ok=True, value=value)
+
+
+def fallback_value_for(type_info: TypeInfo) -> str:
+    """A always-valid placeholder value for ``type_info``, used to replace an
+    invalid user entry so generation never emits a value that can't compile."""
+    kind = type_info.kind
+    if kind in _VECTOR_KINDS:
+        return "(others => '0')"
+    if kind in _SCALAR_BIT_KINDS:
+        return "'0'"
+    if kind == "positive":
+        return "1"
+    if kind in ("integer", "natural"):
+        return "0"
+    if kind == "boolean":
+        return "false"
+    if kind == "real":
+        return "0.0"
+    if kind == "time":
+        return "0 ns"
+    return ""
